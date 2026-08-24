@@ -8,6 +8,6 @@ correlation only. It never executes exploits, payloads, brute force,
 or any offensive/destructive action.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __app_name__ = "DRACXX"
 EXPLOITATION_DISABLED = True
