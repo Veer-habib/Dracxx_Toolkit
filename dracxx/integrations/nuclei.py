@@ -1,7 +1,7 @@
 """nuclei adapter - template-based vulnerability DETECTION only.
-Only 'exposure', 'misconfiguration', 'vulnerability'-detection, 'cve' and
-'technologies' template tags are used for identification; no intrusive
-or exploit-tagged templates are ever executed."""
+Only safe tags are used; intrusive/exploit templates are never executed.
+Supports fast mode for quick scans.
+"""
 from __future__ import annotations
 import json
 from typing import List, Dict
@@ -15,11 +15,37 @@ class NucleiAdapter(ToolAdapter):
     binary_name = "nuclei"
     display_name = "Nuclei"
 
-    async def scan(self, target: str, severity: str = "") -> List[Dict]:
-        args = ["-u", target, "-jsonl", "-silent", "-tags", SAFE_TAGS, "-etags", EXCLUDED_TAGS]
-        if severity:
-            args += ["-severity", severity]
-        r = await self.run(args, timeout=600)
+    async def scan(
+        self,
+        target: str,
+        severity: str = "",
+        fast: bool = False,
+        timeout: int | None = None,
+    ) -> List[Dict]:
+        """Run nuclei detection scan.
+
+        fast=True → critical,high,medium only + shorter timeout + rate limit
+        """
+        args = [
+            "-u", target,
+            "-jsonl",
+            "-silent",
+            "-tags", SAFE_TAGS,
+            "-etags", EXCLUDED_TAGS,
+            "-no-color",
+        ]
+        if fast:
+            # Quick pass: higher severity only, limited concurrency
+            args += ["-severity", severity or "critical,high,medium"]
+            args += ["-c", "25", "-rl", "150"]
+            timeout = timeout or 120
+        else:
+            if severity:
+                args += ["-severity", severity]
+            args += ["-c", "50", "-rl", "300"]
+            timeout = timeout or 300
+
+        r = await self.run(args, timeout=timeout)
         if not r.ok or not r.stdout:
             return []
         out = []

@@ -80,5 +80,11 @@ def build_scope_from_targets(targets: List[str]) -> Scope:
             continue
         except ValueError:
             pass
-        domains.append(t)
+        # Extract host from URL so https://example.com/path scopes correctly
+        m = re.match(r"^[a-zA-Z]+://([^/]+)", t)
+        if m:
+            host = m.group(1).split(":")[0]
+            domains.append(host)
+        else:
+            domains.append(t)
     return Scope(allowed_domains=domains, allowed_cidrs=cidrs, confirmed=True)

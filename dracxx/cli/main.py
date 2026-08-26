@@ -88,20 +88,39 @@ def recon(target: str, profile: ScanProfile = ScanProfile.STANDARD):
 
 
 @app.command()
-def scan(target: str, profile: ScanProfile = ScanProfile.STANDARD):
-    """Run vulnerability scanning (nuclei) against a target."""
-    console.print(f"[bold]Vulnerability scan:[/bold] {target}")
+def scan(
+    target: str,
+    fast: bool = typer.Option(True, "--fast/--full", help="Fast = critical/high/medium only (default)"),
+    output: Optional[Path] = typer.Option(None, help="Optional JSON output path"),
+):
+    """Quick vulnerability scan (Nuclei safe templates only). Fast by default."""
+    from dracxx.core.scope import build_scope_from_targets
+    scope = build_scope_from_targets([target])
+    if not scope.is_target_allowed(target):
+        console.print("[red]Target not in authorized scope.[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[bold]Quick vuln scan:[/bold] {target}  ({'FAST' if fast else 'FULL'})")
     nuclei = NucleiAdapter()
     if not nuclei.is_installed():
         console.print("[!] nuclei not installed — cannot run vulnerability scan")
         raise typer.Exit(1)
 
     async def _run():
-        results = await nuclei.scan(target)
-        console.print(f"Detections: {len(results)}")
-        for r in results[:30]:
+        results = await nuclei.scan(target, fast=fast)
+        console.print(f"[green]Detections: {len(results)}[/green]")
+        for r in results[:40]:
             info = r.get("info", {})
-            console.print(f"  [{info.get('severity','info').upper()}] {info.get('name')}")
+            sev = str(info.get("severity", "info")).upper()
+            name = info.get("name", "?")
+            matched = r.get("matched-at") or r.get("host") or ""
+            console.print(f"  [bold]{sev:8}[/bold] {name}")
+            if matched:
+                console.print(f"           {matched}")
+        if output:
+            import json as _json
+            output.write_text(_json.dumps(results, indent=2, default=str))
+            console.print(f"JSON written to {output}")
 
     asyncio.run(_run())
 

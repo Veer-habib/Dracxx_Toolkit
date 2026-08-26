@@ -1,25 +1,22 @@
 # Changelog
 
-## [1.1.0] — 2026-08-24
+## [1.2.0] — 2026-08-26
 
-### Improved
-- Concurrent workflow engine (subdomain tools, web probes, nuclei scans run with asyncio)
-- Multi-phase pipeline with clear progress reporting (Passive → Network → Web → Vuln → Risk)
-- Proper package `__init__.py` files for all modules
-- Professional README with architecture, honest limitations, and clear security stance
-- Version bump and cleaner project structure
+### Speed & usability
+- **New FAST profile** — nuclei + httpx only, typically 1–3 minutes
+- Amass only runs on DEEP (no more hangs on STANDARD/LIGHT)
+- Hard timeouts on Subfinder (90s) and Amass (120s)
+- Nuclei fast mode: critical/high/medium only + rate limits
+- Nmap fast mode: top-100 ports for LIGHT/FAST
+- `dracxx-vuln scan` is now a proper **quick vulnerability scanner** (fast by default)
+- Scope correctly handles full URLs (`https://host/path`)
 
 ### Security
 - Exploitation remains permanently disabled
-- Nuclei restricted to safe tags only
-- Scope control and authorized-use policy unchanged
+- Nuclei still restricted to safe tags only
+
+## [1.1.0] — 2026-08-24
+
+- Concurrent workflow, package structure, professional README
 
 ## [1.0.0] — Initial release
-
-- CLI + interactive console
-- Scope control, CVE/CPE engine, risk & confidence engines
-- Tool adapters (nmap, nuclei, subfinder, httpx, amass, …)
-- Dual-mode AI provider
-- Multi-format reporting
-- SQLite storage
-- Guard tests ensuring no exploitation constructs

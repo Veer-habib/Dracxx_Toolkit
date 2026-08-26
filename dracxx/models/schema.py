@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 
 class ScanProfile(str, Enum):
+    FAST = "FAST"          # nuclei + httpx only, max speed
     PASSIVE = "PASSIVE"
     LIGHT = "LIGHT"
     STANDARD = "STANDARD"

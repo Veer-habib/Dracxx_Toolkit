@@ -1,6 +1,7 @@
 """Nmap adapter - port/service/version enumeration. Safe detection scripts
 only (e.g. -sV, default/safe NSE categories). No exploit/brute NSE scripts
-are ever invoked."""
+are ever invoked.
+"""
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
@@ -16,16 +17,31 @@ class NmapAdapter(ToolAdapter):
     binary_name = "nmap"
     display_name = "Nmap"
 
-    async def scan(self, target: str, ports: str = "top-1000", deep: bool = False) -> List[Port]:
+    async def scan(
+        self,
+        target: str,
+        ports: str = "top-1000",
+        deep: bool = False,
+        fast: bool = False,
+    ) -> List[Port]:
         args = ["-oX", "-", "-sV", "--script", SAFE_SCRIPT_CATEGORIES]
-        if ports == "top-1000":
+        if fast:
+            # Top 100 ports, no heavy scripts beyond version
+            args = ["-oX", "-", "-sV", "--top-ports", "100", "--open"]
+            timeout = 60
+        elif ports == "top-1000":
             args += ["--top-ports", "1000"]
+            timeout = 180
         elif ports:
             args += ["-p", ports]
-        if deep:
+            timeout = 180
+        else:
+            timeout = 180
+        if deep and not fast:
             args += ["-A"]
+            timeout = 600
         args += [target]
-        result = await self.run(args, timeout=600 if deep else 180)
+        result = await self.run(args, timeout=timeout)
         if not result.ok or not result.stdout:
             return []
         return self._parse_xml(result.stdout, target)

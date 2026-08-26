@@ -1,7 +1,7 @@
 # DRACXX Toolkit
 
 **AI-Driven Reconnaissance & Vulnerability Intelligence Framework**  
-**v1.1.0 — MADE BY DRACXX**
+**v1.2.0 — MADE BY DRACXX**
 
 ```
 ╔════════════════════════════════════════════╗
@@ -103,7 +103,13 @@ The installer:
 ### Usage
 
 ```bash
-# Full automated pipeline
+# Quick vulnerability scan (fastest)
+dracxx-vuln scan example.com
+
+# Full pipeline — FAST (nuclei + httpx only)
+dracxx-vuln workflow example.com --profile FAST --output report.json
+
+# Full pipeline — STANDARD (balanced)
 dracxx-vuln workflow example.com --profile STANDARD --output report.json
 
 # Recon only
@@ -228,4 +234,4 @@ MIT — see [LICENSE](LICENSE).
 
 ---
 
-**DRACXX v1.1.0** — Detection. Intelligence. Nothing more.
+**DRACXX v1.2.0** — Detection. Intelligence. Nothing more.

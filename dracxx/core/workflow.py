@@ -1,5 +1,11 @@
 """Automated workflow orchestrator: recon → vuln → CVE → risk → report.
 
+Speed-focused design:
+  FAST     → nuclei + httpx only on main target (~1-3 min)
+  LIGHT    → + quick nmap + subfinder
+  STANDARD → balanced concurrent pipeline
+  DEEP     → includes Amass + deeper nmap
+
 Falls back gracefully when optional tools are unavailable.
 EXPLOITATION: PERMANENTLY DISABLED.
 """
@@ -34,8 +40,17 @@ def new_session_id() -> str:
     return f"DRX-{datetime.utcnow().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
 
 
+def _normalize_target(target: str) -> str:
+    """Strip scheme/path so tools get a clean host when useful."""
+    t = target.strip()
+    if "://" in t:
+        t = t.split("://", 1)[1]
+    t = t.split("/")[0].split(":")[0]
+    return t or target.strip()
+
+
 class WorkflowEngine:
-    """End-to-end orchestrator with concurrent tool execution and graceful degradation."""
+    """End-to-end orchestrator optimized for speed + graceful degradation."""
 
     def __init__(
         self,
@@ -57,50 +72,63 @@ class WorkflowEngine:
     ) -> List[Finding]:
         findings: List[Finding] = []
         sid = self.session_id
+        host = _normalize_target(target)
 
-        # ── Phase 1: Passive recon (concurrent) ──────────────────────────
-        self.progress(f"[{sid}] Phase 1 — Passive recon (subdomains)")
-        subdomains = await self._passive_recon(target)
-        self.progress(f"[{sid}]   → {len(subdomains)} subdomain(s) discovered")
+        # ── FAST path: max speed vulnerability scan ─────────────────────
+        if profile == ScanProfile.FAST:
+            self.progress(f"[{sid}] FAST mode — quick vuln scan on {host}")
+            findings.extend(await self._vuln_scan([target], profile, fast=True))
+            findings.extend(await self._web_recon([target], profile))
+            findings = deduplicate(findings)
+            self._score(findings)
+            self.progress(f"[{sid}] FAST complete — {len(findings)} finding(s)")
+            return findings
 
-        # ── Phase 2: Network enumeration ────────────────────────────────
-        self.progress(f"[{sid}] Phase 2 — Network enumeration (ports/services)")
-        ports = await self._network_enum(target, profile)
-        self.progress(f"[{sid}]   → {len(ports)} open port(s)")
+        # ── Phase 1: Passive recon (Subfinder only; Amass only on DEEP) ──
+        self.progress(f"[{sid}] Phase 1 — Passive recon")
+        subdomains = await self._passive_recon(host, profile)
+        self.progress(f"[{sid}]   → {len(subdomains)} subdomain(s)")
 
-        # Correlate CVEs for discovered products
-        cve_tasks = [
-            self._correlate_cves(target, p.product, p.version, p.port)
-            for p in ports
-            if p.product
-        ]
-        if cve_tasks:
-            cve_results = await asyncio.gather(*cve_tasks, return_exceptions=True)
-            for res in cve_results:
-                if isinstance(res, list):
-                    findings.extend(res)
-
-        # ── Phase 3: Web / technology detection ─────────────────────────
-        web_targets = [target] + subdomains[:8]
-        self.progress(f"[{sid}] Phase 3 — Web & technology recon ({len(web_targets)} target(s))")
-        web_findings = await self._web_recon(web_targets, profile)
-        findings.extend(web_findings)
-
-        # ── Phase 4: Vulnerability detection (Nuclei) ───────────────────
+        # ── Phase 2: Network enum (skip on PASSIVE) ─────────────────────
+        ports = []
         if profile != ScanProfile.PASSIVE:
-            self.progress(f"[{sid}] Phase 4 — Vulnerability detection (safe templates only)")
-            vuln_findings = await self._vuln_scan(web_targets, profile)
-            findings.extend(vuln_findings)
+            self.progress(f"[{sid}] Phase 2 — Network enumeration")
+            ports = await self._network_enum(host, profile)
+            self.progress(f"[{sid}]   → {len(ports)} open port(s)")
+            cve_tasks = [
+                self._correlate_cves(host, p.product, p.version, p.port)
+                for p in ports if p.product
+            ]
+            if cve_tasks:
+                for res in await asyncio.gather(*cve_tasks, return_exceptions=True):
+                    if isinstance(res, list):
+                        findings.extend(res)
 
-        # ── Phase 5: Dedup + Risk scoring ───────────────────────────────
-        self.progress(f"[{sid}] Phase 5 — Deduplication & risk scoring")
+        # ── Phase 3: Web tech detection ─────────────────────────────────
+        web_targets = [target]
+        # Keep subdomain fan-out small for speed
+        limit = 3 if profile == ScanProfile.LIGHT else 6
+        web_targets += subdomains[:limit]
+        self.progress(f"[{sid}] Phase 3 — Web/tech recon ({len(web_targets)} target(s))")
+        findings.extend(await self._web_recon(web_targets, profile))
+
+        # ── Phase 4: Vulnerability detection ────────────────────────────
+        if profile != ScanProfile.PASSIVE:
+            self.progress(f"[{sid}] Phase 4 — Vulnerability detection (safe templates)")
+            findings.extend(await self._vuln_scan(web_targets, profile))
+
+        # ── Phase 5: Dedup + risk ───────────────────────────────────────
+        self.progress(f"[{sid}] Phase 5 — Dedup & risk scoring")
         findings = deduplicate(findings)
+        self._score(findings)
+        self.progress(f"[{sid}] Workflow complete — {len(findings)} finding(s)")
+        return findings
 
+    def _score(self, findings: List[Finding]) -> None:
         for f in findings:
             top_cve = (
                 max(f.cves, key=lambda c: (c.kev, c.cvss_score or 0))
-                if f.cves
-                else None
+                if f.cves else None
             )
             f.risk_score = compute_risk_score(
                 cvss_score=top_cve.cvss_score if top_cve else None,
@@ -110,32 +138,31 @@ class WorkflowEngine:
                 confidence=f.confidence,
             )
 
-        self.progress(f"[{sid}] Workflow complete — {len(findings)} finding(s)")
-        return findings
+    async def _passive_recon(self, target: str, profile: ScanProfile) -> List[str]:
+        """Prefer Subfinder (fast). Amass only on DEEP, with hard timeout."""
+        seen: set[str] = set()
+        tasks = []
 
-    # ── Internal helpers ────────────────────────────────────────────────
-
-    async def _passive_recon(self, target: str) -> List[str]:
-        """Run subdomain enumeration tools concurrently and merge results."""
-        adapters = []
         sub = SubfinderAdapter()
-        amass = AmassAdapter()
         if sub.is_installed():
-            adapters.append(("subfinder", sub.enumerate(target)))
+            tasks.append(self._timed(sub.enumerate(target), 90, "Subfinder"))
         else:
             self.progress("[!] Subfinder unavailable — skipping")
-        if amass.is_installed() and hasattr(amass, "enumerate"):
-            adapters.append(("amass", amass.enumerate(target)))
-        else:
-            self.progress("[!] Amass unavailable — skipping")
 
-        if not adapters:
+        # Amass is slow; only use on DEEP
+        if profile == ScanProfile.DEEP:
+            amass = AmassAdapter()
+            if amass.is_installed():
+                tasks.append(self._timed(amass.enumerate(target, passive=True), 120, "Amass"))
+            else:
+                self.progress("[!] Amass unavailable — skipping")
+        else:
+            self.progress("[*] Amass skipped (use --profile DEEP to enable)")
+
+        if not tasks:
             return []
 
-        results = await asyncio.gather(
-            *[coro for _, coro in adapters], return_exceptions=True
-        )
-        seen: set[str] = set()
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         for res in results:
             if isinstance(res, list):
                 for s in res:
@@ -143,38 +170,42 @@ class WorkflowEngine:
                         seen.add(s.strip().lower())
         return sorted(seen)
 
+    async def _timed(self, coro, seconds: float, name: str):
+        try:
+            return await asyncio.wait_for(coro, timeout=seconds)
+        except asyncio.TimeoutError:
+            self.progress(f"[!] {name} timed out after {seconds}s — continuing")
+            return []
+        except Exception as e:
+            self.progress(f"[!] {name} error: {e}")
+            return []
+
     async def _network_enum(self, target: str, profile: ScanProfile):
         nmap = NmapAdapter()
         if not nmap.is_installed():
-            self.progress("[!] Nmap unavailable — continuing without port data")
+            self.progress("[!] Nmap unavailable — skipping")
             return []
-        deep = profile in (ScanProfile.DEEP, ScanProfile.STANDARD)
-        return await nmap.scan(target, deep=deep)
+        fast = profile in (ScanProfile.LIGHT, ScanProfile.FAST)
+        deep = profile == ScanProfile.DEEP
+        return await nmap.scan(target, deep=deep, fast=fast)
 
-    async def _web_recon(
-        self, targets: List[str], profile: ScanProfile
-    ) -> List[Finding]:
-        """Technology detection via httpx (when available)."""
+    async def _web_recon(self, targets: List[str], profile: ScanProfile) -> List[Finding]:
         findings: List[Finding] = []
         httpx_ad = HttpxAdapter()
         if not httpx_ad.is_installed():
             self.progress("[!] httpx unavailable — skipping tech detection")
             return findings
 
-        # Run httpx against multiple targets concurrently (bounded)
-        sem = asyncio.Semaphore(5)
+        sem = asyncio.Semaphore(8)
 
         async def _probe(t: str):
             async with sem:
-                if hasattr(httpx_ad, "probe"):
-                    return await httpx_ad.probe([t])
-                if hasattr(httpx_ad, "scan"):
-                    return await httpx_ad.scan(t)
-                return []
+                try:
+                    return await asyncio.wait_for(httpx_ad.probe([t]), timeout=25)
+                except Exception:
+                    return []
 
-        results = await asyncio.gather(
-            *[_probe(t) for t in targets], return_exceptions=True
-        )
+        results = await asyncio.gather(*[_probe(t) for t in targets], return_exceptions=True)
         for t, res in zip(targets, results):
             if isinstance(res, Exception) or not res:
                 continue
@@ -182,48 +213,50 @@ class WorkflowEngine:
             for item in items:
                 tech = None
                 evidence = str(item)[:500]
-                if hasattr(item, "technologies"):  # WebEndpoint model
+                if hasattr(item, "technologies"):
                     tech = ", ".join(item.technologies) if item.technologies else None
-                    evidence = f"{getattr(item, 'url', t)} status={getattr(item, 'status_code', '?')} title={getattr(item, 'title', '')}"
+                    evidence = (
+                        f"{getattr(item, 'url', t)} "
+                        f"status={getattr(item, 'status_code', '?')} "
+                        f"title={getattr(item, 'title', '')}"
+                    )
                 elif isinstance(item, dict):
                     tech = item.get("tech") or item.get("technologies")
                     if isinstance(tech, list):
                         tech = ", ".join(tech) if tech else None
-                findings.append(
-                    Finding(
-                        finding_id=f"TECH-{uuid.uuid4().hex[:8]}",
-                        title=f"Technology detected on {t}",
-                        severity=Severity.INFO,
-                        confidence=Confidence.LIKELY,
-                        target=t,
-                        asset=t,
-                        technology=str(tech) if tech else None,
-                        evidence=evidence,
-                        scanner="httpx",
-                    )
-                )
+                findings.append(Finding(
+                    finding_id=f"TECH-{uuid.uuid4().hex[:8]}",
+                    title=f"Technology detected on {t}",
+                    severity=Severity.INFO,
+                    confidence=Confidence.LIKELY,
+                    target=t,
+                    asset=t,
+                    technology=str(tech) if tech else None,
+                    evidence=evidence,
+                    scanner="httpx",
+                ))
         return findings
 
     async def _vuln_scan(
-        self, targets: List[str], profile: ScanProfile
+        self, targets: List[str], profile: ScanProfile, fast: bool = False
     ) -> List[Finding]:
-        """Nuclei detection only — safe tags, no exploit templates."""
         findings: List[Finding] = []
         nuclei = NucleiAdapter()
         if not nuclei.is_installed():
             self.progress("[!] Nuclei unavailable — skipping vulnerability detection")
             return findings
 
-        sem = asyncio.Semaphore(3)
+        fast = fast or profile in (ScanProfile.FAST, ScanProfile.LIGHT)
+        sem = asyncio.Semaphore(4)
 
         async def _scan_one(t: str):
             async with sem:
-                return await nuclei.scan(t)
+                try:
+                    return await nuclei.scan(t, fast=fast)
+                except Exception:
+                    return []
 
-        results = await asyncio.gather(
-            *[_scan_one(t) for t in targets], return_exceptions=True
-        )
-
+        results = await asyncio.gather(*[_scan_one(t) for t in targets], return_exceptions=True)
         for t, res in zip(targets, results):
             if isinstance(res, Exception) or not res:
                 continue
@@ -232,44 +265,33 @@ class WorkflowEngine:
                 sev = NUCLEI_SEVERITY_MAP.get(
                     str(info.get("severity", "info")).lower(), Severity.INFO
                 )
-                findings.append(
-                    Finding(
-                        finding_id=f"NUC-{uuid.uuid4().hex[:8]}",
-                        title=info.get("name", "Nuclei detection"),
-                        severity=sev,
-                        confidence=Confidence.LIKELY,
-                        target=t,
-                        asset=t,
-                        technology=(
-                            info.get("tags", [None])[0] if info.get("tags") else None
-                        ),
-                        evidence=r.get("matched-at") if isinstance(r, dict) else None,
-                        scanner="nuclei",
-                        references=info.get("reference", []) or [],
-                        remediation=info.get("remediation"),
-                    )
-                )
+                findings.append(Finding(
+                    finding_id=f"NUC-{uuid.uuid4().hex[:8]}",
+                    title=info.get("name", "Nuclei detection"),
+                    severity=sev,
+                    confidence=Confidence.LIKELY,
+                    target=t,
+                    asset=t,
+                    technology=(info.get("tags", [None])[0] if info.get("tags") else None),
+                    evidence=r.get("matched-at") if isinstance(r, dict) else None,
+                    scanner="nuclei",
+                    references=info.get("reference", []) or [],
+                    remediation=info.get("remediation"),
+                ))
         return findings
 
     async def _correlate_cves(
-        self,
-        target: str,
-        product: str,
-        version: Optional[str],
-        port: int,
+        self, target: str, product: str, version: Optional[str], port: int
     ) -> List[Finding]:
         cve_matches = await self.cve_engine.correlate(product, version)
         if not cve_matches:
             return []
-
         confidence = score_confidence(
             version_matched=bool(version),
             cpe_matched=True,
             scanner_count=1,
             has_vendor_advisory=False,
-            has_cve_range_match=any(
-                c.match_status == "AFFECTED" for c in cve_matches
-            ),
+            has_cve_range_match=any(c.match_status == "AFFECTED" for c in cve_matches),
             has_config_evidence=False,
         )
         top_sev = (
@@ -277,24 +299,19 @@ class WorkflowEngine:
             if any(c.cvss_score and c.cvss_score >= 7 for c in cve_matches)
             else Severity.MEDIUM
         )
-        return [
-            Finding(
-                finding_id=f"CVE-COR-{uuid.uuid4().hex[:8]}",
-                title=f"{product} {version or ''} — potential CVE matches",
-                severity=top_sev,
-                confidence=confidence,
-                target=target,
-                asset=target,
-                port=port,
-                technology=product,
-                version=version,
-                cpe=cve_matches[0].cpe,
-                cves=cve_matches,
-                scanner="cve-engine",
-                references=[r for c in cve_matches for r in c.references][:10],
-                remediation=(
-                    "Upgrade to a patched version per vendor advisory; "
-                    "verify via changelog."
-                ),
-            )
-        ]
+        return [Finding(
+            finding_id=f"CVE-COR-{uuid.uuid4().hex[:8]}",
+            title=f"{product} {version or ''} — potential CVE matches",
+            severity=top_sev,
+            confidence=confidence,
+            target=target,
+            asset=target,
+            port=port,
+            technology=product,
+            version=version,
+            cpe=cve_matches[0].cpe,
+            cves=cve_matches,
+            scanner="cve-engine",
+            references=[r for c in cve_matches for r in c.references][:10],
+            remediation="Upgrade to a patched version per vendor advisory; verify via changelog.",
+        )]
