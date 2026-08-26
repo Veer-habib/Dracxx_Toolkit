@@ -1,6 +1,6 @@
 [project]
 name = "dracxx"
-version = "1.2.0"
+version = "1.2.1"
 description = "DRACXX - AI-Driven Reconnaissance & Vulnerability Intelligence Framework (MADE BY DRACXX). Exploitation permanently disabled."
 requires-python = ">=3.11"
 dependencies = [

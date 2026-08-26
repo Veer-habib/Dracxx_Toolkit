@@ -92,15 +92,20 @@ def scan(
     target: str,
     fast: bool = typer.Option(True, "--fast/--full", help="Fast = critical/high/medium only (default)"),
     output: Optional[Path] = typer.Option(None, help="Optional JSON output path"),
+    ai: bool = typer.Option(False, "--ai", help="Run AI analysis on findings after scan"),
+    limit: int = typer.Option(50, help="Max findings to print"),
 ):
-    """Quick vulnerability scan (Nuclei safe templates only). Fast by default."""
+    """Vulnerability scan with full detail (Nuclei safe templates only)."""
     from dracxx.core.scope import build_scope_from_targets
+    from rich.panel import Panel
+    from rich.markdown import Markdown
+
     scope = build_scope_from_targets([target])
     if not scope.is_target_allowed(target):
         console.print("[red]Target not in authorized scope.[/red]")
         raise typer.Exit(1)
 
-    console.print(f"[bold]Quick vuln scan:[/bold] {target}  ({'FAST' if fast else 'FULL'})")
+    console.print(f"[bold]Vulnerability scan:[/bold] {target}  ({'FAST' if fast else 'FULL'})")
     nuclei = NucleiAdapter()
     if not nuclei.is_installed():
         console.print("[!] nuclei not installed — cannot run vulnerability scan")
@@ -108,19 +113,80 @@ def scan(
 
     async def _run():
         results = await nuclei.scan(target, fast=fast)
-        console.print(f"[green]Detections: {len(results)}[/green]")
-        for r in results[:40]:
-            info = r.get("info", {})
+        console.print(f"[green]Detections: {len(results)}[/green]\n")
+
+        for i, r in enumerate(results[:limit], 1):
+            info = r.get("info", {}) if isinstance(r, dict) else {}
             sev = str(info.get("severity", "info")).upper()
-            name = info.get("name", "?")
-            matched = r.get("matched-at") or r.get("host") or ""
-            console.print(f"  [bold]{sev:8}[/bold] {name}")
-            if matched:
-                console.print(f"           {matched}")
+            name = info.get("name", "Unknown finding")
+            desc = (info.get("description") or "").strip()
+            matched = r.get("matched-at") or r.get("host") or r.get("url") or target
+            template_id = r.get("template-id") or r.get("templateID") or ""
+            curl = r.get("curl-command") or ""
+            refs = info.get("reference") or []
+            if isinstance(refs, str):
+                refs = [refs]
+            classification = info.get("classification") or {}
+            cve_list = classification.get("cve-id") or info.get("cve-id") or []
+            if isinstance(cve_list, str):
+                cve_list = [cve_list]
+            remediation = info.get("remediation") or ""
+
+            sev_color = {
+                "CRITICAL": "bold red", "HIGH": "red", "MEDIUM": "yellow",
+                "LOW": "blue", "INFO": "dim",
+            }.get(sev, "white")
+
+            console.print(Panel.fit(
+                f"[bold]{name}[/bold]",
+                title=f"[{sev_color}]#{i} {sev}[/{sev_color}]",
+                border_style="cyan",
+            ))
+            console.print(f"  [bold]Affected URL:[/bold]  {matched}")
+            if template_id:
+                console.print(f"  [bold]Template:[/bold]     {template_id}")
+            if cve_list:
+                console.print(f"  [bold]CVE(s):[/bold]       {', '.join(cve_list)}")
+            if desc:
+                # truncate very long descriptions
+                short = desc if len(desc) <= 500 else desc[:500] + "..."
+                console.print(f"  [bold]Description:[/bold]  {short}")
+            if remediation:
+                console.print(f"  [bold]Remediation:[/bold]  {remediation}")
+            if refs:
+                console.print(f"  [bold]References:[/bold]   {', '.join(str(x) for x in refs[:5])}")
+            if curl:
+                console.print(f"  [dim]Evidence curl: {curl[:120]}[/dim]")
+            console.print()
+
         if output:
             import json as _json
             output.write_text(_json.dumps(results, indent=2, default=str))
-            console.print(f"JSON written to {output}")
+            console.print(f"[green]Full JSON written to {output}[/green]")
+
+        if ai and results:
+            console.print("\n[bold cyan]AI analysis (advisory only)...[/bold cyan]")
+            cfg = load_config()
+            from dracxx.providers.ai import build_provider
+            provider = build_provider(cfg.ai)
+            # Feed structured summary to AI
+            summary = []
+            for r in results[:25]:
+                info = r.get("info", {}) if isinstance(r, dict) else {}
+                summary.append({
+                    "name": info.get("name"),
+                    "severity": info.get("severity"),
+                    "matched_at": r.get("matched-at") or r.get("host"),
+                    "description": (info.get("description") or "")[:300],
+                    "cve": (info.get("classification") or {}).get("cve-id"),
+                })
+            analysis = await provider.analyze(
+                summary,
+                "Explain each finding briefly, rank by real-world risk, "
+                "flag likely false positives, and give a prioritized remediation plan. "
+                "Do not suggest exploits or attack commands.",
+            )
+            console.print(Panel(analysis, title="AI Analysis", border_style="magenta"))
 
     asyncio.run(_run())
 

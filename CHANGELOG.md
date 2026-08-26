@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.1] — 2026-08-26
+
+### Detailed scan + AI
+- `dracxx-vuln scan` prints full finding detail: affected URL, description, CVE, remediation, template ID
+- Optional `--ai` flag for advisory AI analysis after scan
+- `--full` / `--fast` modes retained
+- JSON export with `--output`
+
+### Carry-forward from 1.2.0
+- FAST profile, Amass only on DEEP, hard timeouts, URL scope fix
+
+
 ## [1.2.0] — 2026-08-26
 
 ### Speed & usability
