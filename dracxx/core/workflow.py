@@ -317,6 +317,36 @@ class WorkflowEngine:
                 ))
         return findings
 
+
+    async def _url_discovery(self, domain: str, profile: ScanProfile) -> List[str]:
+        """Passive historical URLs + optional Katana crawl (detection only)."""
+        found: set[str] = set()
+        try:
+            wb = WaybackAdapter()
+            if wb.is_installed():
+                urls = await self._timed(wb.fetch(domain, limit=150), 90, "waybackurls/gau")
+                if isinstance(urls, list):
+                    found.update(u for u in urls if isinstance(u, str) and u.strip())
+            else:
+                self.progress("[!] waybackurls/gau unavailable — skipping historical URLs")
+        except Exception as e:
+            self.progress(f"[!] URL discovery (wayback) error: {e}")
+
+        if profile == ScanProfile.DEEP:
+            try:
+                katana = KatanaAdapter()
+                if katana.is_installed():
+                    crawled = await self._timed(
+                        katana.crawl(f"https://{domain}", depth=2), 120, "Katana"
+                    )
+                    if isinstance(crawled, list):
+                        found.update(u for u in crawled if isinstance(u, str) and u.strip())
+                else:
+                    self.progress("[!] Katana unavailable — skipping crawl")
+            except Exception as e:
+                self.progress(f"[!] Katana error: {e}")
+        return sorted(found)[:200]
+
     async def _correlate_cves(
         self, target: str, product: str, version: Optional[str], port: int
     ) -> List[Finding]:
