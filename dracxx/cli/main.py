@@ -208,6 +208,8 @@ def workflow(target: str, profile: ScanProfile = ScanProfile.STANDARD,
     findings = asyncio.run(engine.run(target, profile))
 
     console.print(reporting.to_terminal_summary(findings))
+    console.print()
+    console.print(reporting.to_terminal_detail(findings))
 
     session = get_session()
     try:
@@ -259,20 +261,45 @@ def assets():
 
 
 @app.command()
-def findings():
-    """List findings stored in the database."""
+def findings(
+    summary: bool = typer.Option(False, "--summary", help="Show counts only"),
+    limit: int = typer.Option(50, help="Max findings to load from DB"),
+):
+    """Show detailed vulnerability findings from the database."""
+    from dracxx.models.schema import Finding, Confidence, Severity, CVEMatch
     session = get_session()
     try:
-        rows = session.query(FindingRow).order_by(FindingRow.risk_score.desc()).limit(50).all()
+        rows = session.query(FindingRow).order_by(FindingRow.risk_score.desc()).limit(limit).all()
         if not rows:
-            console.print("No findings stored yet.")
+            console.print("No findings stored yet. Run a workflow or scan first.")
             return
-        table = Table(title="DRACXX Findings")
-        table.add_column("ID"); table.add_column("Title"); table.add_column("Sev")
-        table.add_column("Risk"); table.add_column("Asset")
+        findings_list = []
         for r in rows:
-            table.add_row(r.finding_id, r.title[:40], r.severity, str(r.risk_score), r.asset)
-        console.print(table)
+            try:
+                cves = [CVEMatch(**c) for c in json.loads(r.cves_json or "[]")]
+            except Exception:
+                cves = []
+            try:
+                conf = Confidence(r.confidence)
+            except Exception:
+                conf = Confidence.INFO
+            try:
+                sev = Severity(r.severity)
+            except Exception:
+                sev = Severity.INFO
+            findings_list.append(Finding(
+                finding_id=r.finding_id, title=r.title, severity=sev,
+                confidence=conf, target=r.target or "", asset=r.asset or "",
+                port=r.port, protocol=r.protocol, technology=r.technology,
+                version=r.version, cpe=r.cpe, cwe=r.cwe, evidence=r.evidence,
+                scanner=r.scanner or "unknown",
+                references=json.loads(r.references_json or "[]"),
+                remediation=r.remediation, cves=cves, risk_score=r.risk_score,
+            ))
+        if summary:
+            console.print(reporting.to_terminal_summary(findings_list))
+        else:
+            console.print(reporting.to_terminal_detail(findings_list))
     finally:
         session.close()
 

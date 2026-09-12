@@ -81,6 +81,16 @@ dracxx/
 
 ## Quick Start
 
+### Update existing install
+
+```bash
+cd Dracxx_Toolkit   # or your clone path
+chmod +x update.sh
+./update.sh
+source .venv/bin/activate
+dracxx-vuln --version
+```
+
 ### Kali / Linux Installation
 
 ```bash

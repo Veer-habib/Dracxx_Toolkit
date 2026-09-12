@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.2.2] — 2026-09-13
+
+### Findings detail view
+- `findings` in console and CLI now prints **full vulnerability detail** by default
+  (title, severity, asset, evidence, CVEs, risk score, remediation)
+- Use `findings summary` (console) or `dracxx-vuln findings --summary` for counts only
+- Workflow completion also prints the detailed view automatically
+- Console workflow persists findings to the database for later `report` / `findings`
+
+### Updater
+- New `update.sh` — one command to `git pull` + reinstall editable package
+
+
 ## [1.2.1] — 2026-08-26
 
 ### Detailed scan + AI

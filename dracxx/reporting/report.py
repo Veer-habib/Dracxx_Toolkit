@@ -110,3 +110,68 @@ def to_terminal_summary(findings: List[Finding]) -> str:
     lines.append("-" * 30)
     lines.append(f"Total: {len(findings)}")
     return "\n".join(lines)
+
+
+def to_terminal_detail(findings: List[Finding]) -> str:
+    """Full per-finding detail for console/CLI display."""
+    if not findings:
+        return "No findings."
+    sev = _summary(findings)
+    lines = [
+        "DRACXX Findings — Detailed View",
+        "=" * 60,
+        "Summary:",
+    ]
+    for k in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]:
+        if k in sev:
+            lines.append(f"  {k:<10} {sev[k]}")
+    lines.append(f"  TOTAL: {len(findings)}")
+    lines.append("=" * 60)
+
+    ordered = sorted(
+        findings,
+        key=lambda x: (
+            {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}.get(
+                x.severity.value, 5
+            ),
+            -(x.risk_score or 0),
+        ),
+    )
+    for i, f in enumerate(ordered, 1):
+        lines.append("")
+        lines.append(f"#{i}  [{f.severity.value}]  {f.title}")
+        lines.append("-" * 60)
+        lines.append(f"  Finding ID : {f.finding_id}")
+        lines.append(f"  Asset      : {f.asset}")
+        lines.append(f"  Target     : {f.target}")
+        if f.port:
+            lines.append(f"  Port       : {f.port}/{f.protocol or 'tcp'}")
+        if f.technology:
+            lines.append(f"  Technology : {f.technology} {f.version or ''}".rstrip())
+        if f.cpe:
+            lines.append(f"  CPE        : {f.cpe}")
+        lines.append(f"  Confidence : {f.confidence.value}")
+        lines.append(f"  Risk score : {f.risk_score if f.risk_score is not None else 'N/A'}")
+        lines.append(f"  Scanner    : {f.scanner}")
+        if f.cwe:
+            lines.append(f"  CWE        : {f.cwe}")
+        if f.evidence:
+            ev = f.evidence if len(f.evidence) <= 300 else f.evidence[:300] + "..."
+            lines.append(f"  Evidence   : {ev}")
+        if f.cves:
+            lines.append("  CVEs:")
+            for c in f.cves:
+                lines.append(
+                    f"    - {c.cve_id} | status={c.match_status} | "
+                    f"CVSS={c.cvss_score} | EPSS={c.epss_score} | KEV={c.kev}"
+                )
+        if f.references:
+            refs = ", ".join(str(r) for r in f.references[:5])
+            lines.append(f"  References : {refs}")
+        if f.remediation:
+            rem = f.remediation if len(f.remediation) <= 400 else f.remediation[:400] + "..."
+            lines.append(f"  Remediation: {rem}")
+    lines.append("")
+    lines.append("=" * 60)
+    lines.append(BRAND_FOOTER)
+    return "\n".join(lines)

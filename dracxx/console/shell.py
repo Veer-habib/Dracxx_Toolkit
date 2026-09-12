@@ -30,7 +30,7 @@ DRACXX Console Commands:
   scan                    Run vulnerability scan against current target
   workflow                Run full automated workflow
   cve <product> [version] Look up CVE correlation
-  findings                Show findings from last run
+  findings [summary]      Show detailed findings (or summary counts only)
   tools                   Show tool availability
   doctor                  Run system health checks
   config                  Show config path
@@ -140,6 +140,10 @@ class DracxxShell(cmd.Cmd):
         engine = WorkflowEngine(self.cfg, progress_cb=progress)
         self.last_findings = asyncio.run(engine.run(self.target, self.profile))
         console.print(reporting.to_terminal_summary(self.last_findings))
+        console.print()
+        console.print(reporting.to_terminal_detail(self.last_findings))
+        # Persist for CLI report/findings commands
+        self._save_findings_to_db()
 
     def do_cve(self, arg):
         parts = shlex.split(arg)
@@ -161,7 +165,12 @@ class DracxxShell(cmd.Cmd):
         if not self.last_findings:
             console.print("No findings cached — run 'workflow' first.")
             return
-        console.print(reporting.to_terminal_summary(self.last_findings))
+        mode = (arg or "").strip().lower()
+        if mode in ("summary", "sum", "s"):
+            console.print(reporting.to_terminal_summary(self.last_findings))
+        else:
+            # Full detail by default
+            console.print(reporting.to_terminal_detail(self.last_findings))
 
     def do_tools(self, arg):
         from dracxx.cli.main import ALL_ADAPTERS
