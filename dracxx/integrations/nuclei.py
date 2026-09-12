@@ -7,7 +7,7 @@ import json
 from typing import List, Dict
 from dracxx.integrations.base import ToolAdapter
 
-SAFE_TAGS = "cve,exposure,misconfig,tech,default-login-detect,ssl"
+SAFE_TAGS = "cve,exposure,misconfig,tech,token,config,ssl,default-login-detect,takeover,panel"
 EXCLUDED_TAGS = "dos,fuzz,intrusive,rce-exec"
 
 

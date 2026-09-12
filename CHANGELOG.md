@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.3.0] — 2026-09-13
+
+### Production-oriented bug-hunting improvements (detection only)
+- Multi-target workflow: `dracxx-vuln workflow -l targets.txt`
+- Severity filter: `findings --severity HIGH`, `workflow --min-severity MEDIUM`
+- Auto-save JSON reports under `~/.dracxx/reports/`
+- Passive URL discovery: waybackurls/gau + Katana crawl (DEEP)
+- Assetfinder added to passive recon; subdomain fan-out capped via config
+- Expanded safe Nuclei tags: token, config, takeover, panel (still non-intrusive)
+- dnsx adapter fixed (list-file based resolution)
+- New wayback integration adapter
+
+### Safety
+- Exploitation remains permanently disabled
+
+
 ## [1.2.2] — 2026-09-13
 
 ### Findings detail view

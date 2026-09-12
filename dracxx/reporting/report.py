@@ -199,3 +199,12 @@ def to_terminal_detail(findings: List[Finding]) -> str:
     lines.append("=" * 60)
     lines.append(BRAND_FOOTER)
     return "\n".join(lines)
+
+
+SEVERITY_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+
+
+def filter_by_severity(findings: List[Finding], min_severity: str = "INFO") -> List[Finding]:
+    """Keep findings at or above min_severity."""
+    rank = SEVERITY_RANK.get(min_severity.upper(), 4)
+    return [f for f in findings if SEVERITY_RANK.get(f.severity.value, 4) <= rank]

@@ -28,6 +28,7 @@ from dracxx.integrations.nuclei import NucleiAdapter
 from dracxx.integrations.subfinder import SubfinderAdapter
 from dracxx.integrations.testssl import TestSSLAdapter
 from dracxx.integrations.zap import ZapAdapter
+from dracxx.integrations.wayback import WaybackAdapter
 from dracxx.models.schema import ScanProfile
 from dracxx.reporting import report as reporting
 from dracxx.startup.banners import render_startup
@@ -38,7 +39,7 @@ console = Console()
 ALL_ADAPTERS = [
     NmapAdapter(), NucleiAdapter(), SubfinderAdapter(), AmassAdapter(),
     AssetfinderAdapter(), HttpxAdapter(), KatanaAdapter(), FfufAdapter(),
-    NiktoAdapter(), TestSSLAdapter(), NaabuAdapter(), ZapAdapter(),
+    NiktoAdapter(), TestSSLAdapter(), NaabuAdapter(), ZapAdapter(), WaybackAdapter(),
 ]
 
 
@@ -199,24 +200,58 @@ def scan(
 
 
 @app.command()
-def workflow(target: str, profile: ScanProfile = ScanProfile.STANDARD,
-             output: Optional[Path] = typer.Option(None, help="Write JSON report to path")):
+def workflow(
+    target: Optional[str] = typer.Argument(None),
+    profile: ScanProfile = ScanProfile.STANDARD,
+    output: Optional[Path] = typer.Option(None, help="Write JSON report to path"),
+    targets_file: Optional[Path] = typer.Option(None, "--list", "-l", help="File with one target per line"),
+    min_severity: Optional[str] = typer.Option(None, "--min-severity", help="Filter displayed findings"),
+):
     """Run the full automated DRACXX pipeline end-to-end."""
     cfg = load_config()
-    scope = build_scope_from_targets([target])
-    if not scope.is_target_allowed(target):
-        console.print("[red]Target not in authorized scope.[/red]")
+    targets: list[str] = []
+    if targets_file:
+        targets = [ln.strip() for ln in targets_file.read_text().splitlines() if ln.strip() and not ln.startswith("#")]
+    if target:
+        targets.insert(0, target)
+    if not targets:
+        console.print("[red]Provide a target or --list file[/red]")
         raise typer.Exit(1)
 
+    all_findings = []
     def progress(msg: str):
         console.print(f"[cyan]{msg}[/cyan]")
 
-    engine = WorkflowEngine(cfg, progress_cb=progress)
-    findings = asyncio.run(engine.run(target, profile))
+    for t in targets:
+        scope = build_scope_from_targets([t])
+        if not scope.is_target_allowed(t):
+            console.print(f"[red]Skipping (scope): {t}[/red]")
+            continue
+        engine = WorkflowEngine(cfg, progress_cb=progress)
+        findings = asyncio.run(engine.run(t, profile))
+        all_findings.extend(findings)
+
+    findings = all_findings
+    if min_severity:
+        from dracxx.reporting.report import filter_by_severity
+        findings = filter_by_severity(findings, min_severity)
 
     console.print(reporting.to_terminal_summary(findings))
     console.print()
     console.print(reporting.to_terminal_detail(findings))
+
+    try:
+        from dracxx.config.config import CONFIG_DIR
+        import datetime as _dt
+        reports_dir = Path(CONFIG_DIR) / "reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        stamp = _dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        auto_path = reports_dir / f"dracxx-{stamp}.json"
+        meta = {"profile": profile.value, "session_id": "cli", "count": len(findings)}
+        auto_path.write_text(reporting.to_json(findings, meta))
+        console.print(f"[dim]Auto-saved report: {auto_path}[/dim]")
+    except Exception as e:
+        console.print(f"[dim]Auto-save skipped: {e}[/dim]")
 
     session = get_session()
     try:
@@ -238,7 +273,7 @@ def workflow(target: str, profile: ScanProfile = ScanProfile.STANDARD,
         session.close()
 
     if output:
-        meta = {"target": target, "profile": profile.value, "session_id": "adhoc"}
+        meta = {"targets": targets, "profile": profile.value, "session_id": "adhoc"}
         output.write_text(reporting.to_json(findings, meta))
         console.print(f"Report written to {output}")
 
@@ -270,6 +305,7 @@ def assets():
 @app.command()
 def findings(
     summary: bool = typer.Option(False, "--summary", help="Show counts only"),
+    severity: Optional[str] = typer.Option(None, "--severity", help="Min severity: INFO|LOW|MEDIUM|HIGH|CRITICAL"),
     limit: int = typer.Option(50, help="Max findings to load from DB"),
 ):
     """Show detailed vulnerability findings from the database."""
@@ -303,6 +339,9 @@ def findings(
                 references=json.loads(r.references_json or "[]"),
                 remediation=r.remediation, cves=cves, risk_score=r.risk_score,
             ))
+        if severity:
+            from dracxx.reporting.report import filter_by_severity
+            findings_list = filter_by_severity(findings_list, severity)
         if summary:
             console.print(reporting.to_terminal_summary(findings_list))
         else:

@@ -25,6 +25,9 @@ from dracxx.integrations.httpx_adapter import HttpxAdapter
 from dracxx.integrations.nmap import NmapAdapter
 from dracxx.integrations.nuclei import NucleiAdapter
 from dracxx.integrations.subfinder import SubfinderAdapter
+from dracxx.integrations.assetfinder import AssetfinderAdapter
+from dracxx.integrations.katana import KatanaAdapter
+from dracxx.integrations.wayback import WaybackAdapter
 from dracxx.models.schema import Confidence, Finding, ScanProfile, Severity
 
 NUCLEI_SEVERITY_MAP = {
@@ -104,13 +107,22 @@ class WorkflowEngine:
                     if isinstance(res, list):
                         findings.extend(res)
 
-        # ── Phase 3: Web tech detection ─────────────────────────────────
+        # ── Phase 3: Web tech + passive URL discovery ───────────────────
         web_targets = [target]
-        # Keep subdomain fan-out small for speed
-        limit = 3 if profile == ScanProfile.LIGHT else 6
+        limit = 3 if profile == ScanProfile.LIGHT else (8 if profile != ScanProfile.DEEP else 15)
         web_targets += subdomains[:limit]
         self.progress(f"[{sid}] Phase 3 — Web/tech recon ({len(web_targets)} target(s))")
         findings.extend(await self._web_recon(web_targets, profile))
+
+        if profile in (ScanProfile.STANDARD, ScanProfile.DEEP) and profile != ScanProfile.FAST:
+            self.progress(f"[{sid}] Phase 3b — Passive URL / crawl discovery")
+            extra_urls = await self._url_discovery(host, profile)
+            if extra_urls:
+                self.progress(f"[{sid}]   → {len(extra_urls)} historical/crawl URL(s)")
+                # Feed a sample of discovered URLs into nuclei later via web_targets
+                for u in extra_urls[:10]:
+                    if u not in web_targets:
+                        web_targets.append(u)
 
         # ── Phase 4: Vulnerability detection ────────────────────────────
         if profile != ScanProfile.PASSIVE:
@@ -139,7 +151,7 @@ class WorkflowEngine:
             )
 
     async def _passive_recon(self, target: str, profile: ScanProfile) -> List[str]:
-        """Prefer Subfinder (fast). Amass only on DEEP, with hard timeout."""
+        """Subfinder + Assetfinder; Amass only on DEEP. Hard timeouts."""
         seen: set[str] = set()
         tasks = []
 
@@ -149,7 +161,13 @@ class WorkflowEngine:
         else:
             self.progress("[!] Subfinder unavailable — skipping")
 
-        # Amass is slow; only use on DEEP
+        af = AssetfinderAdapter()
+        if af.is_installed() and hasattr(af, "enumerate"):
+            tasks.append(self._timed(af.enumerate(target), 60, "Assetfinder"))
+        elif af.is_installed():
+            # some adapters use different method names
+            pass
+
         if profile == ScanProfile.DEEP:
             amass = AmassAdapter()
             if amass.is_installed():
@@ -168,7 +186,17 @@ class WorkflowEngine:
                 for s in res:
                     if isinstance(s, str) and s.strip():
                         seen.add(s.strip().lower())
-        return sorted(seen)
+        # Cap subdomain fan-out for production speed
+        max_subs = 50
+        try:
+            max_subs = int(self.config.scan.get("max_subdomains", 50))
+        except Exception:
+            pass
+        ordered = sorted(seen)
+        if len(ordered) > max_subs:
+            self.progress(f"[*] Capping subdomains {len(ordered)} → {max_subs}")
+            ordered = ordered[:max_subs]
+        return ordered
 
     async def _timed(self, coro, seconds: float, name: str):
         try:

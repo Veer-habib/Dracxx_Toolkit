@@ -33,6 +33,9 @@ DEFAULT_CONFIG = {
         "concurrency": 10,
         "timeout_seconds": 30,
         "rate_limit_per_sec": 5,
+        "max_subdomains": 50,
+        "min_severity": "INFO",
+        "auto_save_reports": True,
     },
     "scope": {
         "require_confirmation": True,
