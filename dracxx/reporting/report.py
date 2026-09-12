@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 from datetime import datetime
 from typing import List
 
@@ -113,9 +114,31 @@ def to_terminal_summary(findings: List[Finding]) -> str:
 
 
 def to_terminal_detail(findings: List[Finding]) -> str:
-    """Full per-finding detail for console/CLI display."""
+    """Full per-finding detail including host/subdomain and match location."""
     if not findings:
         return "No findings."
+
+    def _host_from(f: Finding) -> str:
+        for candidate in (f.asset, f.target, f.evidence or ""):
+            if not candidate:
+                continue
+            s = str(candidate).strip()
+            # URL → host
+            m = re.match(r"^https?://([^/:]+)", s, re.I)
+            if m:
+                return m.group(1).lower()
+            # bare host / subdomain
+            if "://" not in s and "/" not in s and " " not in s and "." in s:
+                return s.split(":")[0].lower()
+        return (f.asset or f.target or "unknown").split("/")[0]
+
+    def _location(f: Finding) -> str:
+        if f.evidence:
+            return f.evidence
+        if f.port:
+            return f"{f.asset}:{f.port}"
+        return f.asset or f.target or "N/A"
+
     sev = _summary(findings)
     lines = [
         "DRACXX Findings — Detailed View",
@@ -138,26 +161,27 @@ def to_terminal_detail(findings: List[Finding]) -> str:
         ),
     )
     for i, f in enumerate(ordered, 1):
+        host = _host_from(f)
+        loc = _location(f)
         lines.append("")
         lines.append(f"#{i}  [{f.severity.value}]  {f.title}")
         lines.append("-" * 60)
-        lines.append(f"  Finding ID : {f.finding_id}")
-        lines.append(f"  Asset      : {f.asset}")
-        lines.append(f"  Target     : {f.target}")
+        lines.append(f"  Finding ID    : {f.finding_id}")
+        lines.append(f"  Host/Subdomain: {host}")
+        lines.append(f"  Found at      : {loc}")
+        lines.append(f"  Asset         : {f.asset}")
+        lines.append(f"  Target        : {f.target}")
         if f.port:
-            lines.append(f"  Port       : {f.port}/{f.protocol or 'tcp'}")
+            lines.append(f"  Port          : {f.port}/{f.protocol or 'tcp'}")
         if f.technology:
-            lines.append(f"  Technology : {f.technology} {f.version or ''}".rstrip())
+            lines.append(f"  Technology    : {f.technology} {f.version or ''}".rstrip())
         if f.cpe:
-            lines.append(f"  CPE        : {f.cpe}")
-        lines.append(f"  Confidence : {f.confidence.value}")
-        lines.append(f"  Risk score : {f.risk_score if f.risk_score is not None else 'N/A'}")
-        lines.append(f"  Scanner    : {f.scanner}")
+            lines.append(f"  CPE           : {f.cpe}")
+        lines.append(f"  Confidence    : {f.confidence.value}")
+        lines.append(f"  Risk score    : {f.risk_score if f.risk_score is not None else 'N/A'}")
+        lines.append(f"  Scanner       : {f.scanner}")
         if f.cwe:
-            lines.append(f"  CWE        : {f.cwe}")
-        if f.evidence:
-            ev = f.evidence if len(f.evidence) <= 300 else f.evidence[:300] + "..."
-            lines.append(f"  Evidence   : {ev}")
+            lines.append(f"  CWE           : {f.cwe}")
         if f.cves:
             lines.append("  CVEs:")
             for c in f.cves:
@@ -167,10 +191,10 @@ def to_terminal_detail(findings: List[Finding]) -> str:
                 )
         if f.references:
             refs = ", ".join(str(r) for r in f.references[:5])
-            lines.append(f"  References : {refs}")
+            lines.append(f"  References    : {refs}")
         if f.remediation:
             rem = f.remediation if len(f.remediation) <= 400 else f.remediation[:400] + "..."
-            lines.append(f"  Remediation: {rem}")
+            lines.append(f"  Remediation   : {rem}")
     lines.append("")
     lines.append("=" * 60)
     lines.append(BRAND_FOOTER)

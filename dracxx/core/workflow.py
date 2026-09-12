@@ -265,15 +265,24 @@ class WorkflowEngine:
                 sev = NUCLEI_SEVERITY_MAP.get(
                     str(info.get("severity", "info")).lower(), Severity.INFO
                 )
+                matched = None
+                host = t
+                if isinstance(r, dict):
+                    matched = r.get("matched-at") or r.get("host") or r.get("url")
+                    host = r.get("host") or r.get("ip") or t
+                    if not matched and r.get("url"):
+                        matched = r.get("url")
+                # Prefer matched URL as asset when it is a full URL
+                asset_val = matched if (matched and str(matched).startswith("http")) else (host or t)
                 findings.append(Finding(
                     finding_id=f"NUC-{uuid.uuid4().hex[:8]}",
                     title=info.get("name", "Nuclei detection"),
                     severity=sev,
                     confidence=Confidence.LIKELY,
                     target=t,
-                    asset=t,
+                    asset=str(asset_val),
                     technology=(info.get("tags", [None])[0] if info.get("tags") else None),
-                    evidence=r.get("matched-at") if isinstance(r, dict) else None,
+                    evidence=str(matched) if matched else str(t),
                     scanner="nuclei",
                     references=info.get("reference", []) or [],
                     remediation=info.get("remediation"),

@@ -142,9 +142,16 @@ def scan(
                 title=f"[{sev_color}]#{i} {sev}[/{sev_color}]",
                 border_style="cyan",
             ))
-            console.print(f"  [bold]Affected URL:[/bold]  {matched}")
+            # Host / subdomain extraction
+            host = r.get("host") if isinstance(r, dict) else None
+            if not host and matched:
+                import re as _re
+                m = _re.match(r"^https?://([^/:]+)", str(matched), _re.I)
+                host = m.group(1) if m else str(matched).split("/")[0]
+            console.print(f"  [bold]Host/Subdomain:[/bold] {host or target}")
+            console.print(f"  [bold]Found at:[/bold]       {matched}")
             if template_id:
-                console.print(f"  [bold]Template:[/bold]     {template_id}")
+                console.print(f"  [bold]Template:[/bold]      {template_id}")
             if cve_list:
                 console.print(f"  [bold]CVE(s):[/bold]       {', '.join(cve_list)}")
             if desc:
