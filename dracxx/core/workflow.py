@@ -109,8 +109,24 @@ class WorkflowEngine:
 
         # ── Phase 3: Web tech + passive URL discovery ───────────────────
         web_targets = [target]
-        limit = 3 if profile == ScanProfile.LIGHT else (8 if profile != ScanProfile.DEEP else 15)
-        web_targets += subdomains[:limit]
+        # LIGHT keeps a small sample; STANDARD/DEEP use all discovered subdomains
+        if profile == ScanProfile.LIGHT:
+            limit = 5
+            web_targets += subdomains[:limit]
+        elif profile == ScanProfile.FAST:
+            pass  # main target only
+        else:
+            # STANDARD + DEEP: all subdomains from Phase 1
+            web_targets += list(subdomains)
+        # de-dupe preserve order
+        seen_t = set()
+        uniq = []
+        for w in web_targets:
+            k = w.lower() if isinstance(w, str) else str(w)
+            if k not in seen_t:
+                seen_t.add(k)
+                uniq.append(w)
+        web_targets = uniq
         self.progress(f"[{sid}] Phase 3 — Web/tech recon ({len(web_targets)} target(s))")
         findings.extend(await self._web_recon(web_targets, profile))
 
@@ -186,16 +202,18 @@ class WorkflowEngine:
                 for s in res:
                     if isinstance(s, str) and s.strip():
                         seen.add(s.strip().lower())
-        # Cap subdomain fan-out for production speed
-        max_subs = 50
+        # Cap subdomain fan-out (0 or negative = no cap — use all discovered)
+        max_subs = 0
         try:
-            max_subs = int(self.config.scan.get("max_subdomains", 50))
+            max_subs = int(self.config.scan.get("max_subdomains", 0))
         except Exception:
-            pass
+            max_subs = 0
         ordered = sorted(seen)
-        if len(ordered) > max_subs:
-            self.progress(f"[*] Capping subdomains {len(ordered)} → {max_subs}")
+        if max_subs > 0 and len(ordered) > max_subs:
+            self.progress(f"[*] Capping subdomains {len(ordered)} → {max_subs} (set scan.max_subdomains: 0 for all)")
             ordered = ordered[:max_subs]
+        else:
+            self.progress(f"[*] Using all {len(ordered)} discovered subdomain(s)")
         return ordered
 
     async def _timed(self, coro, seconds: float, name: str):

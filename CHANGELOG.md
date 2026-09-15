@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.2] — 2026-09-15
+
+### Fixes
+- Console: restore missing `_save_findings_to_db` (AttributeError after workflow)
+- Subdomain cap: `max_subdomains: 0` means **no cap** (scan all discovered hosts)
+- STANDARD/DEEP profiles now pass **all** Phase-1 subdomains into web/vuln phases (not a 50/15 sample)
+
+
 ## [1.3.0] — 2026-09-13
 
 ### Production-oriented bug-hunting improvements (detection only)

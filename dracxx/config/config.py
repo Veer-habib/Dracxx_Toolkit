@@ -33,7 +33,7 @@ DEFAULT_CONFIG = {
         "concurrency": 10,
         "timeout_seconds": 30,
         "rate_limit_per_sec": 5,
-        "max_subdomains": 50,
+        "max_subdomains": 0,  # 0 = no cap (scan all discovered)
         "min_severity": "INFO",
         "auto_save_reports": True,
     },

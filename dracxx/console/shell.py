@@ -215,6 +215,45 @@ class DracxxShell(cmd.Cmd):
 
         asyncio.run(_run())
 
+
+    def _save_findings_to_db(self):
+        """Persist last_findings so CLI report/findings can use them."""
+        if not self.last_findings:
+            return
+        import json
+        from dracxx.database.db import get_session, FindingRow
+        session = get_session()
+        try:
+            for f in self.last_findings:
+                row = FindingRow(
+                    session_id="console",
+                    finding_id=f.finding_id,
+                    title=f.title,
+                    severity=f.severity.value,
+                    confidence=f.confidence.value,
+                    target=f.target,
+                    asset=f.asset,
+                    port=f.port,
+                    protocol=f.protocol,
+                    technology=f.technology,
+                    version=f.version,
+                    cpe=f.cpe,
+                    cwe=f.cwe,
+                    evidence=f.evidence,
+                    scanner=f.scanner,
+                    references_json=json.dumps(f.references or []),
+                    remediation=f.remediation,
+                    cves_json=json.dumps([c.model_dump() for c in (f.cves or [])], default=str),
+                    risk_score=f.risk_score,
+                )
+                session.add(row)
+            session.commit()
+            console.print(f"[dim]Saved {len(self.last_findings)} finding(s) to database.[/dim]")
+        except Exception as e:
+            console.print(f"[dim]Could not persist findings: {e}[/dim]")
+        finally:
+            session.close()
+
     def do_exit(self, arg):
         console.print("Exiting DRACXX console.")
         return True
